@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from knowledge.connectors.file_connector import FileConnector
 from knowledge.knowledge_base import KnowledgeBase
 from mcp.embeddings_factory import get_embeddings
+from scripts.setup_supabase import SupabaseSetup
 
 # Configure logging
 logging.basicConfig(
@@ -26,18 +27,35 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+async def setup_supabase():
+    """
+    Set up Supabase tables if they don't exist.
+    """
+    logger.info("Setting up Supabase tables...")
+    setup = SupabaseSetup()
+    success = await setup.setup()
+    
+    if success:
+        logger.info("Supabase tables set up successfully")
+    else:
+        logger.error("Failed to set up Supabase tables")
+        raise RuntimeError("Failed to set up Supabase tables")
+
 async def main():
     """
     Main function to demonstrate the knowledge base.
     """
     logger.info("Starting knowledge base example")
     
+    # Set up Supabase tables
+    await setup_supabase()
+    
     # Initialize the knowledge base
     kb = KnowledgeBase(
         namespace="example",
         vector_db_provider="supabase",
-        embedding_provider="openai",
-        embedding_model="text-embedding-3-small",
+        embedding_provider="deepseek",  # Using Deepseek instead of OpenAI
+        embedding_model="deepseek-ai/deepseek-embedding-v1",
     )
     
     # Initialize the knowledge base
@@ -69,7 +87,7 @@ async def main():
         - **Vector Database Integration**: Store and retrieve information using semantic similarity.
         - **Knowledge Base Management**: Organize knowledge in namespaces and collections.
         - **Connector System**: Import knowledge from various sources like files, APIs, and databases.
-        - **Embedding Models**: Support for multiple embedding models from providers like OpenAI and Anthropic.
+        - **Embedding Models**: Support for multiple embedding models from providers like Deepseek and Replicate.
         - **Async Support**: Built with asyncio for efficient concurrent operations.
         - **Extensible Architecture**: Easily add new vector databases, embedding models, and connectors.
 

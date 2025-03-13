@@ -9,7 +9,9 @@ from typing import Any, Dict, Optional, Union
 
 from core.config.config import get_config
 from mcp.anthropic.embeddings import AnthropicEmbeddings
+from mcp.deepseek.embeddings import DeepseekEmbeddings
 from mcp.openai.embeddings import OpenAIEmbeddings
+from mcp.replicate.embeddings import ReplicateEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +28,12 @@ class EmbeddingsFactory:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         **kwargs,
-    ) -> Union[OpenAIEmbeddings, AnthropicEmbeddings]:
+    ) -> Union[OpenAIEmbeddings, AnthropicEmbeddings, DeepseekEmbeddings, ReplicateEmbeddings]:
         """
         Create an embedding model.
         
         Args:
-            provider: Provider name (e.g., 'openai', 'anthropic')
+            provider: Provider name (e.g., 'openai', 'anthropic', 'deepseek', 'replicate')
             model: Model name
             **kwargs: Additional arguments for the embedding model
             
@@ -51,6 +53,10 @@ class EmbeddingsFactory:
             return OpenAIEmbeddings(model=model, **kwargs)
         elif provider.lower() == "anthropic":
             return AnthropicEmbeddings(model=model, **kwargs)
+        elif provider.lower() == "deepseek":
+            return DeepseekEmbeddings(model=model, **kwargs)
+        elif provider.lower() == "replicate":
+            return ReplicateEmbeddings(model=model, **kwargs)
         else:
             raise ValueError(f"Unsupported embedding provider: {provider}")
 
@@ -61,12 +67,12 @@ def get_embeddings(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     **kwargs,
-) -> Union[OpenAIEmbeddings, AnthropicEmbeddings]:
+) -> Union[OpenAIEmbeddings, AnthropicEmbeddings, DeepseekEmbeddings, ReplicateEmbeddings]:
     """
     Get an embedding model.
     
     Args:
-        provider: Provider name (e.g., 'openai', 'anthropic')
+        provider: Provider name (e.g., 'openai', 'anthropic', 'deepseek', 'replicate')
         model: Model name
         **kwargs: Additional arguments for the embedding model
         
