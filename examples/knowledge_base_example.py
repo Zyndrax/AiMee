@@ -1,11 +1,8 @@
 """
-Example script demonstrating how to use the AiMee knowledge base with Supabase vector database.
+Knowledge Base Example for AiMee.
 
-This script shows how to:
-1. Initialize the knowledge base
-2. Add knowledge to the knowledge base
-3. Search for knowledge in the knowledge base
-4. Import knowledge from files using the file connector
+This example demonstrates how to use the knowledge base and vector database
+to store and retrieve information.
 """
 
 import asyncio
@@ -15,114 +12,111 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from knowledge.connectors.file_connector import create_file_connector
-from knowledge.knowledge_base import get_knowledge_base
+from knowledge.connectors.file_connector import FileConnector
+from knowledge.knowledge_base import KnowledgeBase
+from mcp.embeddings_factory import get_embeddings
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 async def main():
-    """Run the knowledge base example."""
+    """
+    Main function to demonstrate the knowledge base.
+    """
     logger.info("Starting knowledge base example")
     
-    # Check if Supabase credentials are set
-    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
-        logger.warning(
-            "Supabase credentials not set. This example will use dummy implementations. "
-            "Set SUPABASE_URL and SUPABASE_KEY environment variables for real functionality."
-        )
+    # Initialize the knowledge base
+    kb = KnowledgeBase(
+        namespace="example",
+        vector_db_provider="supabase",
+        embedding_provider="openai",
+        embedding_model="text-embedding-3-small",
+    )
     
     # Initialize the knowledge base
-    kb = get_knowledge_base(namespace="example")
-    await kb.initialize()
-    logger.info("Knowledge base initialized")
+    logger.info("Initializing knowledge base")
+    success = await kb.initialize()
     
-    # Add some knowledge directly
-    knowledge_ids = await kb.add_knowledge(
-        texts=[
-            "AiMee is a modular AI-powered assistant platform.",
-            "AiMee is designed for flexibility, extensibility, and cross-platform compatibility.",
-            "AiMee has a pluggable architecture that enables easy extension and customization.",
-        ],
-        metadata=[
-            {"category": "overview", "importance": "high"},
-            {"category": "design", "importance": "medium"},
-            {"category": "architecture", "importance": "high"},
-        ],
-    )
-    logger.info(f"Added {len(knowledge_ids)} knowledge items directly")
+    if not success:
+        logger.error("Failed to initialize knowledge base")
+        return
     
-    # Search for knowledge
-    results = await kb.search_knowledge(query="modular architecture", limit=5)
-    logger.info(f"Found {len(results)} results for 'modular architecture'")
-    
-    for i, result in enumerate(results):
-        logger.info(f"Result {i+1}:")
-        logger.info(f"  Content: {result['content']}")
-        logger.info(f"  Metadata: {result['metadata']}")
-        logger.info(f"  Similarity: {result['similarity']}")
-    
-    # Import knowledge from files
     # Create a file connector
-    examples_dir = Path(__file__).parent
-    file_connector = create_file_connector(
-        namespace="example_files",
-        base_path=examples_dir,
-        file_extensions=[".txt", ".md"],
+    logger.info("Creating file connector")
+    file_connector = FileConnector(
+        knowledge_base=kb,
+        chunk_size=1000,
+        chunk_overlap=200,
     )
     
-    # Initialize the connector
-    await file_connector.initialize()
-    logger.info("File connector initialized")
-    
-    # Create a sample file for demonstration
-    sample_file = examples_dir / "sample_knowledge.md"
+    # Create a sample text file
+    sample_file = Path("sample.txt")
     with open(sample_file, "w") as f:
-        f.write("""# AiMee Knowledge Base Example
+        f.write("""
+        # AiMee: AI Memory and Knowledge Management System
 
-This is a sample file for demonstrating the knowledge base functionality.
+        AiMee is an advanced AI memory and knowledge management system designed to enhance AI applications with persistent memory and knowledge retrieval capabilities.
 
-## Features
+        ## Features
 
-- Vectorized knowledge storage
-- Semantic search capabilities
-- Modular architecture
-- Cross-platform compatibility
+        - **Vector Database Integration**: Store and retrieve information using semantic similarity.
+        - **Knowledge Base Management**: Organize knowledge in namespaces and collections.
+        - **Connector System**: Import knowledge from various sources like files, APIs, and databases.
+        - **Embedding Models**: Support for multiple embedding models from providers like OpenAI and Anthropic.
+        - **Async Support**: Built with asyncio for efficient concurrent operations.
+        - **Extensible Architecture**: Easily add new vector databases, embedding models, and connectors.
 
-## Use Cases
+        ## Use Cases
 
-1. Storing and retrieving information
-2. Building a knowledge graph
-3. Enhancing AI capabilities with domain-specific knowledge
-""")
+        - **Chatbots with Memory**: Create chatbots that remember conversation history and user preferences.
+        - **Document Q&A**: Build systems that can answer questions about documents and knowledge bases.
+        - **Semantic Search**: Implement semantic search for your applications.
+        - **Knowledge Management**: Organize and retrieve knowledge from various sources.
+        """)
     
-    # Import knowledge from the sample file
-    file_ids = await file_connector.import_knowledge(path="sample_knowledge.md")
-    logger.info(f"Imported {len(file_ids)} knowledge items from files")
-    
-    # Search for knowledge in the file namespace
-    file_kb = get_knowledge_base(namespace="example_files")
-    file_results = await file_kb.search_knowledge(query="semantic search", limit=3)
-    logger.info(f"Found {len(file_results)} results for 'semantic search' in files")
-    
-    for i, result in enumerate(file_results):
-        logger.info(f"File Result {i+1}:")
-        logger.info(f"  Content: {result['content'][:100]}...")
-        logger.info(f"  Metadata: {result['metadata']}")
-        logger.info(f"  Similarity: {result['similarity']}")
-    
-    # Clean up
-    await kb.close()
-    await file_connector.close()
-    logger.info("Knowledge base example completed")
+    try:
+        # Load the sample file
+        logger.info("Loading sample file")
+        ids = await file_connector.load_file(sample_file)
+        logger.info(f"Added {len(ids)} chunks to knowledge base")
+        
+        # Search for knowledge
+        logger.info("Searching for knowledge about vector database")
+        results = await kb.search_knowledge("vector database integration")
+        
+        # Display the results
+        logger.info(f"Found {len(results)} results")
+        for i, result in enumerate(results):
+            logger.info(f"Result {i+1}:")
+            logger.info(f"  Content: {result['text'][:100]}...")
+            logger.info(f"  Score: {result['score']}")
+            logger.info(f"  Metadata: {result['metadata']}")
+        
+        # Count knowledge
+        count = await kb.count_knowledge()
+        logger.info(f"Total chunks in knowledge base: {count}")
+        
+        # Clean up
+        logger.info("Deleting knowledge")
+        success = await kb.delete_knowledge(ids)
+        logger.info(f"Deletion {'successful' if success else 'failed'}")
+        
+    finally:
+        # Close the knowledge base
+        logger.info("Closing knowledge base")
+        await kb.close()
+        
+        # Remove the sample file
+        if sample_file.exists():
+            sample_file.unlink()
+            logger.info("Removed sample file")
 
 if __name__ == "__main__":
     asyncio.run(main()) 

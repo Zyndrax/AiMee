@@ -1,8 +1,7 @@
 """
-File Connector for AiMee Knowledge Base.
+File Connector for AiMee.
 
-This module provides a connector for importing knowledge from text files
-into the AiMee knowledge base.
+This module provides a connector for importing knowledge from files.
 """
 
 import logging
@@ -11,230 +10,268 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from knowledge.connectors.base_connector import BaseConnector
+from knowledge.knowledge_base import KnowledgeBase
+from knowledge.text_splitter import TextSplitter, get_text_splitter
 
 logger = logging.getLogger(__name__)
 
 class FileConnector(BaseConnector):
     """
-    Connector for importing knowledge from text files.
+    Connector for importing knowledge from files.
     
-    This connector can import knowledge from:
-    - Individual text files
-    - Directories of text files
-    - Files with specific extensions
+    This class provides methods for:
+    - Loading text from files
+    - Chunking text into smaller pieces
+    - Adding the chunks to a knowledge base
     """
     
     def __init__(
         self,
-        namespace: str = "default",
-        config: Optional[Dict[str, Any]] = None,
-        base_path: Optional[Union[str, Path]] = None,
-        file_extensions: Optional[List[str]] = None,
+        knowledge_base: KnowledgeBase,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+        splitter_type: str = "simple",
     ):
         """
-        Initialize the file connector.
+        Initialize the File Connector.
         
         Args:
-            namespace: Namespace for the knowledge base
-            config: Optional configuration parameters
-            base_path: Base path for file operations
-            file_extensions: List of file extensions to process (e.g., ['.txt', '.md'])
+            knowledge_base: Knowledge base to add the knowledge to
+            chunk_size: Size of the chunks in characters
+            chunk_overlap: Overlap between chunks in characters
+            splitter_type: Type of text splitter to use
         """
-        super().__init__(namespace, config)
+        super().__init__(knowledge_base)
         
-        self.base_path = Path(base_path) if base_path else Path.cwd()
-        self.file_extensions = file_extensions or ['.txt', '.md', '.csv', '.json']
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.splitter_type = splitter_type
+        
+        # Initialize the text splitter
+        self.text_splitter = get_text_splitter(
+            splitter_type=splitter_type,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
     
-    async def _initialize_connector(self) -> bool:
-        """
-        Initialize connector-specific resources.
-        
-        Returns:
-            bool: True if initialization was successful, False otherwise
-        """
-        # Check if the base path exists
-        if not self.base_path.exists():
-            logger.error(f"Base path does not exist: {self.base_path}")
-            return False
-        
-        logger.info(f"File connector initialized with base path: {self.base_path}")
-        return True
-    
-    async def fetch_knowledge(
+    async def load_file(
         self,
-        query: Optional[str] = None,
-        path: Optional[Union[str, Path]] = None,
-        recursive: bool = False,
-        chunk_size: int = 1000,
-        overlap: int = 200,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
+        file_path: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
         """
-        Fetch knowledge from text files.
+        Load a file and add its contents to the knowledge base.
         
         Args:
-            query: Optional glob pattern to filter files
-            path: Path to a file or directory (relative to base_path)
-            recursive: Whether to search directories recursively
-            chunk_size: Size of text chunks to create
-            overlap: Overlap between chunks
-            **kwargs: Additional arguments
+            file_path: Path to the file
+            metadata: Optional metadata to add to the chunks
             
         Returns:
-            List of knowledge items
+            List of IDs for the added chunks
         """
-        if not self._initialized:
-            raise RuntimeError("Connector not initialized. Call initialize() first.")
+        # Convert string path to Path object
+        if isinstance(file_path, str):
+            file_path = Path(file_path)
         
-        # Determine the path to search
-        search_path = self.base_path
-        if path:
-            search_path = self.base_path / path
+        # Ensure the file exists
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
         
-        # Check if the path exists
-        if not search_path.exists():
-            logger.error(f"Path does not exist: {search_path}")
-            return []
+        # Create base metadata
+        if metadata is None:
+            metadata = {}
         
-        # Get the list of files to process
-        files_to_process = []
+        # Add file information to metadata
+        file_metadata = {
+            "source": str(file_path),
+            "filename": file_path.name,
+            "extension": file_path.suffix.lower(),
+            "file_size": file_path.stat().st_size,
+            "created_at": file_path.stat().st_ctime,
+            "modified_at": file_path.stat().st_mtime,
+            **metadata,
+        }
         
-        if search_path.is_file():
-            # Single file
-            files_to_process.append(search_path)
-        else:
-            # Directory
-            glob_pattern = query or "*"
+        logger.info(f"Loading file: {file_path}")
+        
+        try:
+            # Read the file
+            text = await self._read_file(file_path)
             
-            if recursive:
-                # Recursive search
-                for ext in self.file_extensions:
-                    files_to_process.extend(search_path.glob(f"**/{glob_pattern}{ext}"))
-            else:
-                # Non-recursive search
-                for ext in self.file_extensions:
-                    files_to_process.extend(search_path.glob(f"{glob_pattern}{ext}"))
+            # Split the text into chunks
+            chunks = self.text_splitter.split_text(text)
+            
+            logger.info(f"Split file into {len(chunks)} chunks")
+            
+            # Create metadata for each chunk
+            metadatas = []
+            for i, chunk in enumerate(chunks):
+                chunk_metadata = {
+                    "chunk_index": i,
+                    "chunk_count": len(chunks),
+                    **file_metadata,
+                }
+                metadatas.append(chunk_metadata)
+            
+            # Add the chunks to the knowledge base
+            ids = await self.knowledge_base.add_knowledge(chunks, metadatas)
+            
+            logger.info(f"Added {len(ids)} chunks to knowledge base")
+            
+            return ids
+        except Exception as e:
+            logger.error(f"Error loading file {file_path}: {e}")
+            raise
+    
+    async def load_directory(
+        self,
+        directory_path: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+        extensions: Optional[List[str]] = None,
+        recursive: bool = True,
+    ) -> Dict[str, List[str]]:
+        """
+        Load all files in a directory and add their contents to the knowledge base.
         
-        # Process the files
-        knowledge_items = []
+        Args:
+            directory_path: Path to the directory
+            metadata: Optional metadata to add to the chunks
+            extensions: Optional list of file extensions to include
+            recursive: Whether to recursively load files in subdirectories
+            
+        Returns:
+            Dictionary mapping file paths to lists of IDs for the added chunks
+        """
+        # Convert string path to Path object
+        if isinstance(directory_path, str):
+            directory_path = Path(directory_path)
         
-        for file_path in files_to_process:
+        # Ensure the directory exists
+        if not directory_path.exists():
+            raise FileNotFoundError(f"Directory not found: {directory_path}")
+        
+        # Ensure the path is a directory
+        if not directory_path.is_dir():
+            raise NotADirectoryError(f"Not a directory: {directory_path}")
+        
+        # Normalize extensions
+        if extensions:
+            extensions = [ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in extensions]
+        
+        logger.info(f"Loading directory: {directory_path}")
+        
+        # Get all files in the directory
+        files = []
+        if recursive:
+            for root, _, filenames in os.walk(directory_path):
+                for filename in filenames:
+                    file_path = Path(root) / filename
+                    if extensions is None or file_path.suffix.lower() in extensions:
+                        files.append(file_path)
+        else:
+            for file_path in directory_path.iterdir():
+                if file_path.is_file():
+                    if extensions is None or file_path.suffix.lower() in extensions:
+                        files.append(file_path)
+        
+        logger.info(f"Found {len(files)} files to load")
+        
+        # Load each file
+        results = {}
+        for file_path in files:
             try:
-                # Read the file
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Create metadata
-                metadata = {
-                    "file_path": str(file_path.relative_to(self.base_path)),
-                    "file_name": file_path.name,
-                    "file_extension": file_path.suffix,
-                    "file_size": file_path.stat().st_size,
-                    "modified_time": file_path.stat().st_mtime,
+                # Create file-specific metadata
+                file_metadata = {
+                    "directory": str(directory_path),
+                    "relative_path": str(file_path.relative_to(directory_path)),
                 }
                 
-                # Split content into chunks if it's too large
-                if len(content) > chunk_size:
-                    chunks = self._split_text(content, chunk_size, overlap)
-                    
-                    for i, chunk in enumerate(chunks):
-                        chunk_metadata = metadata.copy()
-                        chunk_metadata["chunk_index"] = i
-                        chunk_metadata["total_chunks"] = len(chunks)
-                        
-                        knowledge_items.append({
-                            "content": chunk,
-                            "metadata": chunk_metadata,
-                        })
-                else:
-                    # Add the whole content as a single item
-                    knowledge_items.append({
-                        "content": content,
-                        "metadata": metadata,
-                    })
+                if metadata:
+                    file_metadata.update(metadata)
                 
-                logger.info(f"Processed file: {file_path}")
+                # Load the file
+                ids = await self.load_file(file_path, file_metadata)
+                
+                # Store the results
+                results[str(file_path)] = ids
             except Exception as e:
-                logger.error(f"Error processing file {file_path}: {e}")
+                logger.error(f"Error loading file {file_path}: {e}")
+                results[str(file_path)] = []
         
-        logger.info(f"Fetched {len(knowledge_items)} knowledge items from {len(files_to_process)} files")
-        return knowledge_items
+        return results
     
-    def _split_text(self, text: str, chunk_size: int, overlap: int) -> List[str]:
+    async def _read_file(self, file_path: Path) -> str:
         """
-        Split text into chunks with overlap.
+        Read a file and return its contents.
         
         Args:
-            text: Text to split
-            chunk_size: Size of each chunk
-            overlap: Overlap between chunks
+            file_path: Path to the file
             
         Returns:
-            List of text chunks
+            File contents as a string
         """
-        if len(text) <= chunk_size:
-            return [text]
+        # Get the file extension
+        extension = file_path.suffix.lower()
         
-        chunks = []
-        start = 0
-        
-        while start < len(text):
-            # Get the chunk
-            end = start + chunk_size
-            chunk = text[start:end]
-            
-            # Adjust to end at a sentence or paragraph if possible
-            if end < len(text):
-                # Try to find a paragraph break
-                para_break = chunk.rfind('\n\n')
-                if para_break != -1 and para_break > chunk_size // 2:
-                    end = start + para_break + 2
-                    chunk = text[start:end]
-                else:
-                    # Try to find a sentence break
-                    sentence_breaks = [chunk.rfind('. '), chunk.rfind('! '), chunk.rfind('? ')]
-                    sentence_break = max(sentence_breaks)
-                    
-                    if sentence_break != -1 and sentence_break > chunk_size // 2:
-                        end = start + sentence_break + 2
-                        chunk = text[start:end]
-            
-            chunks.append(chunk)
-            
-            # Move to the next chunk with overlap
-            start = end - overlap
-        
-        return chunks
-    
-    async def close(self) -> None:
-        """
-        Close the connector and release any resources.
-        """
-        # No resources to close for this connector
-        logger.info("File connector closed")
+        # Read the file based on its extension
+        if extension in [".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".csv", ".log"]:
+            # Text files
+            with open(file_path, "r", encoding="utf-8") as f:
+                return f.read()
+        elif extension in [".pdf"]:
+            # PDF files
+            try:
+                import pypdf
+                
+                with open(file_path, "rb") as f:
+                    pdf = pypdf.PdfReader(f)
+                    text = ""
+                    for page in pdf.pages:
+                        text += page.extract_text() + "\n\n"
+                    return text
+            except ImportError:
+                logger.warning("pypdf not installed. Cannot read PDF files.")
+                raise ImportError("pypdf not installed. Cannot read PDF files.")
+        elif extension in [".docx"]:
+            # Word documents
+            try:
+                import docx
+                
+                doc = docx.Document(file_path)
+                text = ""
+                for paragraph in doc.paragraphs:
+                    text += paragraph.text + "\n"
+                return text
+            except ImportError:
+                logger.warning("python-docx not installed. Cannot read DOCX files.")
+                raise ImportError("python-docx not installed. Cannot read DOCX files.")
+        else:
+            # Unsupported file type
+            logger.warning(f"Unsupported file type: {extension}")
+            raise ValueError(f"Unsupported file type: {extension}")
 
 # Factory function to create a file connector
 def create_file_connector(
-    namespace: str = "default",
-    base_path: Optional[Union[str, Path]] = None,
-    file_extensions: Optional[List[str]] = None,
-    config: Optional[Dict[str, Any]] = None,
+    knowledge_base: KnowledgeBase,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+    splitter_type: str = "simple",
 ) -> FileConnector:
     """
     Create a file connector.
     
     Args:
-        namespace: Namespace for the knowledge base
-        base_path: Base path for file operations
-        file_extensions: List of file extensions to process
-        config: Optional configuration parameters
+        knowledge_base: Knowledge base to add the knowledge to
+        chunk_size: Size of the chunks in characters
+        chunk_overlap: Overlap between chunks in characters
+        splitter_type: Type of text splitter to use
         
     Returns:
         File connector instance
     """
     return FileConnector(
-        namespace=namespace,
-        base_path=base_path,
-        file_extensions=file_extensions,
-        config=config,
+        knowledge_base=knowledge_base,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        splitter_type=splitter_type,
     ) 

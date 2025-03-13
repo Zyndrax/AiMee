@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Type, Union
 
 from core.config.config import get_config
 from knowledge.vectordb.supabase_vector import SupabaseVectorDB
+from mcp.embeddings_factory import get_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +22,27 @@ class VectorManager:
     abstracting away the details of the underlying implementation.
     """
     
-    def __init__(self, vector_db: Optional[SupabaseVectorDB] = None):
+    def __init__(
+        self,
+        vector_db: Optional[SupabaseVectorDB] = None,
+        embedding_provider: Optional[str] = None,
+        embedding_model: Optional[str] = None,
+    ):
         """
         Initialize the vector manager.
         
         Args:
             vector_db: Optional vector database instance. If None, a new one will be created.
+            embedding_provider: Provider for embeddings (e.g., 'openai', 'anthropic')
+            embedding_model: Model name for embeddings
         """
+        config = get_config()
+        
         self.vector_db = vector_db or SupabaseVectorDB()
+        self.embedding_provider = embedding_provider or config.ai_models.default_provider
+        self.embedding_model = embedding_model
         self._initialized = False
+        self._embeddings = None
     
     async def initialize(self) -> bool:
         """
@@ -40,14 +53,26 @@ class VectorManager:
         """
         try:
             if not self._initialized:
-                success = await self.vector_db.initialize()
-                if success:
-                    self._initialized = True
-                    logger.info("Vector manager initialized successfully")
-                    return True
-                else:
+                # Initialize the vector database
+                db_success = await self.vector_db.initialize()
+                if not db_success:
                     logger.error("Failed to initialize vector database")
                     return False
+                
+                # Initialize the embeddings model
+                try:
+                    self._embeddings = get_embeddings(
+                        provider=self.embedding_provider,
+                        model=self.embedding_model,
+                    )
+                    logger.info(f"Using {self.embedding_provider} embeddings")
+                except Exception as e:
+                    logger.error(f"Failed to initialize embeddings model: {e}")
+                    return False
+                
+                self._initialized = True
+                logger.info("Vector manager initialized successfully")
+                return True
             return True
         except Exception as e:
             logger.error(f"Error initializing vector manager: {e}")
@@ -197,18 +222,11 @@ class VectorManager:
         Returns:
             List of embedding vectors
         """
-        # In a real implementation, you would use an embedding model to generate embeddings
-        # For now, we'll just return dummy embeddings
+        if not self._embeddings:
+            raise RuntimeError("Embeddings model not initialized")
+        
         logger.info(f"Generating embeddings for {len(texts)} texts")
-        
-        # This is a placeholder for the actual implementation
-        # In a real implementation, you would use something like:
-        # from mcp.openai.embeddings import OpenAIEmbeddings
-        # embeddings_model = OpenAIEmbeddings()
-        # return await embeddings_model.embed_documents(texts)
-        
-        # For now, return dummy embeddings (short vectors for brevity)
-        return [[0.1] * 10 for _ in texts]
+        return await self._embeddings.embed_documents(texts)
     
     async def _generate_embedding(self, text: str) -> List[float]:
         """
@@ -220,18 +238,11 @@ class VectorManager:
         Returns:
             Embedding vector
         """
-        # In a real implementation, you would use an embedding model to generate the embedding
-        # For now, we'll just return a dummy embedding
+        if not self._embeddings:
+            raise RuntimeError("Embeddings model not initialized")
+        
         logger.info(f"Generating embedding for text: {text[:50]}...")
-        
-        # This is a placeholder for the actual implementation
-        # In a real implementation, you would use something like:
-        # from mcp.openai.embeddings import OpenAIEmbeddings
-        # embeddings_model = OpenAIEmbeddings()
-        # return await embeddings_model.embed_query(text)
-        
-        # For now, return a dummy embedding (short vector for brevity)
-        return [0.1] * 10
+        return await self._embeddings.embed_query(text)
 
 # Global vector manager instance
 vector_manager = VectorManager()
